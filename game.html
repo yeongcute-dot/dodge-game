@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>닷지 게임: 온라인 랭킹 + 보스</title>
+  <style>
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans KR",sans-serif;background:#0b1020;color:#e9eefc;display:flex;justify-content:center;align-items:center;min-height:100vh;padding:18px 0;}
+    .wrap{width:min(1020px,96vw);}
+    .top{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;}
+    .card{flex:1 1 360px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:10px 12px;box-shadow:0 10px 30px rgba(0,0,0,0.25);display:flex;align-items:center;justify-content:space-between;gap:10px;}
+    .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+    .hint{opacity:.9;font-size:14px;line-height:1.4;}
+    .small{font-size:13px;opacity:.8;}
+    .kbd{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid rgba(255,255,255,0.18);background:rgba(0,0,0,0.2);font-weight:800;}
+    input{background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.18);border-radius:12px;padding:10px 12px;color:#e9eefc;font-weight:800;width:180px;outline:none;}
+    input::placeholder{color:rgba(233,238,252,0.55);}
+    button{cursor:pointer;border:none;border-radius:12px;padding:10px 14px;font-weight:900;background:#4f7cff;color:white;white-space:nowrap;}
+    button.secondary{background:rgba(255,255,255,0.10);color:#e9eefc;border:1px solid rgba(255,255,255,0.16);}
+    button:active{transform:translateY(1px);}
+    canvas{width:100%;height:auto;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.12);border-radius:18px;box-shadow:0 12px 40px rgba(0,0,0,0.35);touch-action:none;}
+    .rankBox{margin-top:12px;padding:10px 12px;border-radius:14px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);box-shadow:0 10px 30px rgba(0,0,0,0.25);}
+    .rankTitle{font-weight:900;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;}
+    .muted{opacity:.75;font-size:13px;}
+    .status{opacity:.9;font-size:13px;}
+    ol{margin:8px 0 0 22px;padding:0;}
+    li{margin:6px 0;}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="card">
+      <div class="row">
+        <div><b>점수:</b> <span id="score">0</span></div>
+        <div><b>내 최고:</b> <span id="best">0</span></div>
+        <div class="small">보스 등장!</div>
+      </div>
+      <div class="row">
+        <input id="nameInput" maxlength="10" placeholder="이름(최대10)" />
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <button id="btnStart">시작 / 재시작</button>
+        <button id="btnRefresh" class="secondary">랭킹 새로고침</button>
+      </div>
+      <div class="hint">
+        이동: <span class="kbd">←</span> <span class="kbd">→</span> 또는 <span class="kbd">A</span> <span class="kbd">D</span><br/>
+        모바일: 캐릭터 드래그 | <span class="kbd">P</span> 일시정지
+      </div>
+    </div>
+  </div>
+
+  <canvas id="cv" width="960" height="560"></canvas>
+
+  <div class="rankBox">
+    <div class="rankTitle">
+      <span>🏆 온라인 랭킹 TOP 10</span>
+      <span id="status" class="status">연결 준비 중…</span>
+    </div>
+    <ol id="rankList"></ol>
+    <div id="rankEmpty" class="muted" style="display:none;">아직 기록이 없어요 😄</div>
+    <div class="muted" style="margin-top:8px;">※ 폰/PC/다른 기기에서도 같은 랭킹이 보여요.</div>
+  </div>
+</div>
+
+<script type="module">
+  // ===== Firebase SDK =====
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
+  import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
+  import { getFirestore, collection, addDoc, getDocs, query, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
+
+  // ✅ 여기를 네 firebaseConfig 값으로 바꿔줘!
+  const firebaseConfig = {
+    apiKey: "AIzaSyDLVkAMdeLsrErHZaRk3ARWRBVRUC-rs7Q",
+    authDomain: "game2-9ee14.firebaseapp.com",
+    projectId: "game2-9ee14",
+    storageBucket: "game2-9ee14.firebasestorage.app",
+    messagingSenderId: "800322478466",
+    appId: "1:800322478466:web:92d9a35da3c171a843ef9b"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  const statusEl = document.getElementById("status");
+  const rankList = document.getElementById("rankList");
+  const rankEmpty = document.getElementById("rankEmpty");
+  const btnRefresh = document.getElementById("btnRefresh");
+
+  async function ensureLogin(){
+    try{
+      statusEl.textContent = "로그인 중…";
+      await signInAnonymously(auth);
+      statusEl.textContent = "온라인 연결됨 ✅";
+    }catch(e){
+      console.error(e);
+      statusEl.textContent = "연결 실패 ❌ (설정 확인)";
+    }
+  }
+
+  async function fetchRanking(){
+    try{
+      statusEl.textContent = "랭킹 불러오는 중…";
+      const q = query(collection(db, "scores"), orderBy("score","desc"), limit(10));
+      const snap = await getDocs(q);
+
+      const rows = [];
+      snap.forEach(d => rows.push(d.data()));
+
+      rankList.innerHTML = "";
+      if(!rows.length){
+        rankEmpty.style.display = "block";
+        statusEl.textContent = "온라인 연결됨 ✅";
+        return;
+      }
+      rankEmpty.style.display = "none";
+      rows.forEach(r => {
+        const li = document.createElement("li");
+        li.textContent = `${r.name} - ${r.score}점`;
+        rankList.appendChild(li);
+      });
+      statusEl.textContent = "온라인 연결됨 ✅";
+    }catch(e){
+      console.error(e);
+      statusEl.textContent = "랭킹 불러오기 실패 ❌";
+    }
+  }
+
+  async function submitScore(name, score){
+    try{
+      if(!auth.currentUser) await ensureLogin();
+      await addDoc(collection(db, "scores"), {
+        name,
+        score,
+        createdAt: Date.now()
+      });
+      await fetchRanking();
+    }catch(e){
+      console.error(e);
+      statusEl.textContent = "점수 업로드 실패 ❌ (Rules/Auth 확인)";
+    }
+  }
+
+  btnRefresh.addEventListener("click", fetchRanking);
+
+  await ensureLogin();
+  await fetchRanking();
+
+  // ===== 게임 로직 (보스 + 다양한 장애물) =====
+  const canvas = document.getElementById("cv");
+  const ctx = canvas.getContext("2d");
+  const scoreEl = document.getElementById("score");
+  const bestEl = document.getElementById("best");
+  const btnStart = document.getElementById("btnStart");
+  const nameInput = document.getElementById("nameInput");
+
+  const W = canvas.width, H = canvas.height;
+
+  // 로컬(개인) 이름/최고점만 저장
+  const NAME_KEY = "dodge_name_online_v1";
+  const BEST_KEY = "dodge_best_online_v1";
+  nameInput.value = localStorage.getItem(NAME_KEY) || "";
+  let best = Number(localStorage.getItem(BEST_KEY) || 0);
+  bestEl.textContent = best;
+
+  const rand = (a,b)=>Math.random()*(b-a)+a;
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const dist2=(ax,ay,bx,by)=>{const dx=ax-bx, dy=ay-by; return dx*dx+dy*dy;};
+
+  let running=false, paused=false, lastT=0, time=0, score=0;
+  const keys=new Set();
+
+  const player={x:W/2,y:H-70,r:14,speed:560};
+
+  // type: "ball" | "triangle" | "zigzag" | "seeker" | "laser"
+  let hazards=[], spawnTimer=0;
+
+  const BOSS_TIME=38;
+  const BOSS_SURVIVE=22;
+  let bossActive=false, bossTime=0, boss=null, bossShotTimer=0, bossLaserTimer=0;
+  let shake=0;
+
+  function collideCircle(ax,ay,ar,bx,by,br){
+    return dist2(ax,ay,bx,by) <= (ar+br)*(ar+br);
+  }
+  function collideLaser(p, hz){
+    const half = hz.w/2;
+    return Math.abs(p.x - hz.x) <= (half + p.r);
+  }
+
+  function spawnHazard(){
+    const level=1 + time/16;
+    const r=rand(10,24)*Math.min(1.4,0.9+level*0.05);
+
+    const roll=Math.random();
+    let type;
+    if(!bossActive){
+      if(roll<0.40) type="ball";
+      else if(roll<0.62) type="triangle";
+      else if(roll<0.78) type="zigzag";
+      else if(roll<0.92) type="seeker";
+      else type="laser";
+    }else{
+      if(roll<0.55) type="seeker";
+      else type="laser";
+    }
+
+    if(type==="laser"){
+      hazards.push({type,x:rand(40,W-40),w:rand(16,26),warn:1.0,fire:0.55,t:0});
+      return;
+    }
+
+    const x0=rand(r+20,W-r-20), y0=-r-12;
+
+    if(type==="ball"){
+      hazards.push({type,x:x0,y:y0,r,vy:rand(190,360)*Math.min(2.1,0.9+level*0.08),vx:rand(-40,40)});
+    }else if(type==="triangle"){
+      hazards.push({type,x:x0,y:y0,r,vy:rand(210,390)*Math.min(2.2,0.9+level*0.08),spin:rand(-6,6),ang:rand(0,Math.PI*2),vx:rand(-60,60)});
+    }else if(type==="zigzag"){
+      hazards.push({type,x:x0,y:y0,r,vy:rand(170,320)*Math.min(2.1,0.9+level*0.08),amp:rand(90,170),freq:rand(1.2,2.2),phase:rand(0,Math.PI*2)});
+    }else if(type==="seeker"){
+      hazards.push({type,x:x0,y:y0,r,vy:rand(130,220)*Math.min(2.0,0.9+level*0.07),turn:rand(1.8,3.0),vx:rand(-50,50)});
+    }
+  }
+
+  function spawnBoss(){
+    bossActive=true;
+    bossTime=0;
+    hazards = hazards.filter(h => h.type==="laser");
+    boss={x:W/2,y:130,r:46,phase:0};
+    bossShotTimer=0; bossLaserTimer=0;
+    shake=12;
+  }
+
+  function bossShoot(dt){
+    bossShotTimer += dt;
+    bossLaserTimer += dt;
+
+    const ringEvery = bossTime < 10 ? 0.75 : 1.05;
+    if(bossShotTimer >= ringEvery){
+      bossShotTimer=0;
+      const n = bossTime < 10 ? 10 : 14;
+      const base = rand(0, Math.PI*2);
+      for(let i=0;i<n;i++){
+        const ang = base + i*(Math.PI*2/n);
+        hazards.push({type:"ball",x:boss.x,y:boss.y,r:10,vx:Math.cos(ang)*260,vy:Math.sin(ang)*260,fromBoss:true});
+      }
+      shake = Math.min(18, shake+3);
+    }
+
+    if(bossTime>8 && Math.random() < dt*0.9){
+      const dx=player.x-boss.x, dy=player.y-boss.y;
+      const len=Math.max(1, Math.hypot(dx,dy));
+      hazards.push({type:"seeker",x:boss.x,y:boss.y,r:12,vx:(dx/len)*120,vy:(dy/len)*120,turn:3.4,fromBoss:true});
+    }
+
+    if(bossTime>12 && bossLaserTimer>=2.6){
+      bossLaserTimer=0;
+      hazards.push({type:"laser",x:boss.x+rand(-260,260),w:rand(22,36),warn:0.75,fire:0.55,t:0});
+      shake = Math.min(20, shake+4);
+    }
+  }
+
+  function reset(){
+    localStorage.setItem(NAME_KEY, (nameInput.value||"").trim());
+    running=true; paused=false; lastT=0; time=0; score=0;
+    scoreEl.textContent="0";
+    player.x=W/2;
+    hazards=[]; spawnTimer=0;
+    bossActive=false; bossTime=0; boss=null; bossShotTimer=0; bossLaserTimer=0;
+    shake=0;
+    requestAnimationFrame(loop);
+  }
+
+  async function gameOver(){
+    running=false; paused=false;
+    const finalScore=Math.floor(score);
+
+    best=Math.max(best, finalScore);
+    localStorage.setItem(BEST_KEY, best);
+    bestEl.textContent=best;
+
+    // ✅ 온라인 랭킹에 기록
+    const name=(nameInput.value||"").trim() || "익명";
+    await submitScore(name, finalScore);
+
+    draw(true, "GAME OVER");
+  }
+
+  async function gameClear(){
+    running=false; paused=false;
+    score += 500;
+    const finalScore=Math.floor(score);
+
+    best=Math.max(best, finalScore);
+    localStorage.setItem(BEST_KEY, best);
+    bestEl.textContent=best;
+
+    const name=(nameInput.value||"").trim() || "익명";
+    await submitScore(name, finalScore);
+
+    draw(true, "CLEAR! +500");
+  }
+
+  function update(dt){
+    if(paused) return;
+
+    time += dt;
+    const level=1 + time/16;
+    score += dt*(12 + level*2 + (bossActive?6:0));
+    scoreEl.textContent=String(Math.floor(score));
+
+    let dir=0;
+    if(keys.has("ArrowLeft")||keys.has("KeyA")) dir-=1;
+    if(keys.has("ArrowRight")||keys.has("KeyD")) dir+=1;
+    player.x += dir*player.speed*dt;
+    player.x = clamp(player.x, player.r+14, W-player.r-14);
+
+    if(!bossActive){
+      const spawnEvery = Math.max(0.10, 0.60 - level*0.04);
+      spawnTimer += dt;
+      while(spawnTimer >= spawnEvery){
+        spawnTimer -= spawnEvery;
+        spawnHazard();
+      }
+      if(time >= BOSS_TIME) spawnBoss();
+    }else{
+      bossTime += dt;
+      boss.phase += dt;
+      boss.x = W/2 + Math.sin(boss.phase*0.9)*260;
+      bossShoot(dt);
+
+      spawnTimer += dt;
+      if(spawnTimer >= 0.85){
+        spawnTimer=0;
+        spawnHazard();
+      }
+
+      if(bossTime >= BOSS_SURVIVE){
+        gameClear();
+        return;
+      }
+    }
+
+    for(const h of hazards){
+      if(h.type==="laser"){ h.t += dt; continue; }
+
+      if(h.type==="seeker"){
+        const steer = clamp((player.x - h.x)/220, -1, 1);
+        h.vx = (h.vx||0) + steer*(h.turn*220)*dt;
+        h.vx = clamp(h.vx, -320, 320);
+      }
+      if(h.type==="zigzag"){
+        const ox = Math.sin((time*h.freq)+h.phase)*h.amp;
+        h.x += ox*dt;
+      }
+      if(h.type==="triangle"){
+        h.ang += h.spin*dt;
+      }
+
+      h.x += (h.vx||0)*dt;
+      h.y += (h.vy||0)*dt;
+
+      if(!h.fromBoss){
+        h.x = clamp(h.x, h.r, W-h.r);
+      }
+    }
+
+    hazards = hazards.filter(h=>{
+      if(h.type==="laser") return h.t < (h.warn + h.fire + 0.15);
+      const m=80;
+      return h.y < H+m && h.y > -m && h.x > -m && h.x < W+m;
+    });
+
+    for(const h of hazards){
+      if(h.type==="laser"){
+        const deadly = h.t >= h.warn && h.t <= (h.warn + h.fire);
+        if(deadly && collideLaser(player,h)){ gameOver(); return; }
+      }else{
+        if(collideCircle(player.x,player.y,player.r,h.x,h.y,h.r)){ gameOver(); return; }
+      }
+    }
+
+    shake *= 0.88;
+    if(shake < 0.2) shake=0;
+  }
+
+  function draw(ended=false, endText="READY?"){
+    let sx=0, sy=0;
+    if(shake>0){ sx=rand(-shake,shake); sy=rand(-shake,shake); }
+
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,W,H);
+    ctx.translate(sx, sy);
+
+    const g=ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,"rgba(79,124,255,0.14)");
+    g.addColorStop(1,"rgba(0,0,0,0)");
+    ctx.fillStyle=g;
+    ctx.fillRect(0,0,W,H);
+
+    ctx.fillStyle="rgba(255,255,255,0.08)";
+    ctx.fillRect(0,0,W,44);
+
+    ctx.fillStyle="rgba(233,238,252,0.9)";
+    ctx.font="16px system-ui, sans-serif";
+    const bossMsg = bossActive
+      ? `보스전! 생존: ${Math.max(0, Math.ceil(BOSS_SURVIVE - bossTime))}초`
+      : `보스까지: ${Math.max(0, Math.ceil(BOSS_TIME - time))}초`;
+    ctx.fillText(`조작: ←/→ 또는 A/D | P:일시정지 | ${bossMsg}`, 16, 28);
+
+    ctx.strokeStyle="rgba(255,255,255,0.14)";
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(20,H-40); ctx.lineTo(W-20,H-40); ctx.stroke();
+
+    for(const h of hazards){
+      if(h.type==="laser"){
+        const deadly = h.t >= h.warn && h.t <= (h.warn + h.fire);
+        const alpha = deadly ? 0.65 : 0.25;
+        ctx.fillStyle = deadly ? `rgba(255,80,120,${alpha})` : `rgba(255,255,255,${alpha})`;
+        ctx.fillRect(h.x - h.w/2, 44, h.w, H-44);
+        ctx.strokeStyle = deadly ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.18)";
+        ctx.lineWidth = deadly ? 2 : 1;
+        ctx.beginPath(); ctx.moveTo(h.x,44); ctx.lineTo(h.x,H); ctx.stroke();
+        continue;
+      }
+
+      if(h.type==="triangle"){
+        ctx.save();
+        ctx.translate(h.x,h.y);
+        ctx.rotate(h.ang);
+        ctx.beginPath();
+        ctx.moveTo(0,-h.r);
+        ctx.lineTo(h.r*0.9,h.r);
+        ctx.lineTo(-h.r*0.9,h.r);
+        ctx.closePath();
+        ctx.fillStyle="rgba(255,180,90,0.9)";
+        ctx.fill();
+        ctx.restore();
+        continue;
+      }
+
+      ctx.beginPath();
+      if(h.type==="seeker") ctx.fillStyle="rgba(170,140,255,0.92)";
+      else if(h.type==="zigzag") ctx.fillStyle="rgba(110,220,255,0.90)";
+      else ctx.fillStyle="rgba(255,130,130,0.88)";
+      ctx.arc(h.x,h.y,h.r,0,Math.PI*2);
+      ctx.fill();
+    }
+
+    if(bossActive && boss){
+      ctx.beginPath();
+      ctx.fillStyle="rgba(255,70,110,0.18)";
+      ctx.arc(boss.x,boss.y,boss.r+18,0,Math.PI*2);
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.fillStyle="rgba(255,70,110,0.92)";
+      ctx.arc(boss.x,boss.y,boss.r,0,Math.PI*2);
+      ctx.fill();
+
+      ctx.fillStyle="rgba(255,255,255,0.9)";
+      ctx.beginPath();
+      ctx.arc(boss.x-16,boss.y-8,7,0,Math.PI*2);
+      ctx.arc(boss.x+16,boss.y-8,7,0,Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle="rgba(0,0,0,0.7)";
+      ctx.beginPath();
+      ctx.arc(boss.x-16,boss.y-8,3,0,Math.PI*2);
+      ctx.arc(boss.x+16,boss.y-8,3,0,Math.PI*2);
+      ctx.fill();
+
+      ctx.strokeStyle="rgba(0,0,0,0.55)";
+      ctx.lineWidth=4;
+      ctx.beginPath();
+      ctx.arc(boss.x,boss.y+12,16,0.1*Math.PI,0.9*Math.PI);
+      ctx.stroke();
+
+      ctx.fillStyle="rgba(233,238,252,0.92)";
+      ctx.font="bold 16px system-ui, sans-serif";
+      ctx.textAlign="center";
+      ctx.fillText("BOSS", boss.x, boss.y-boss.r-18);
+      ctx.textAlign="left";
+    }
+
+    ctx.beginPath();
+    ctx.fillStyle = paused ? "rgba(130,255,200,0.45)" : "rgba(130,255,200,0.95)";
+    ctx.arc(player.x,player.y,player.r,0,Math.PI*2);
+    ctx.fill();
+
+    if(paused && running){
+      ctx.fillStyle="rgba(0,0,0,0.45)";
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle="#e9eefc";
+      ctx.font="bold 40px system-ui, sans-serif";
+      ctx.textAlign="center";
+      ctx.fillText("PAUSED", W/2, H/2);
+      ctx.font="16px system-ui, sans-serif";
+      ctx.fillText("P를 눌러 계속하기", W/2, H/2 + 30);
+      ctx.textAlign="left";
+    }
+
+    if(!running && ended){
+      ctx.fillStyle="rgba(0,0,0,0.60)";
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle="#e9eefc";
+      ctx.font="bold 52px system-ui, sans-serif";
+      ctx.textAlign="center";
+      ctx.fillText(endText, W/2, H/2 - 20);
+      ctx.font="18px system-ui, sans-serif";
+      ctx.fillStyle="rgba(233,238,252,0.92)";
+      ctx.fillText(`점수: ${Math.floor(score)}  |  내 최고: ${best}`, W/2, H/2 + 24);
+      ctx.fillText("상단의 '시작 / 재시작'을 눌러 다시 시작!", W/2, H/2 + 56);
+      ctx.textAlign="left";
+    }
+
+    ctx.restore();
+  }
+
+  function loop(ts){
+    if(!running) return;
+    if(!lastT) lastT = ts;
+    const dt = Math.min(0.033, (ts-lastT)/1000);
+    lastT = ts;
+    update(dt);
+    draw(false);
+    requestAnimationFrame(loop);
+  }
+
+  // input
+  window.addEventListener("keydown",(e)=>{
+    const allow=["ArrowLeft","ArrowRight","KeyA","KeyD","KeyP"];
+    if(allow.includes(e.code)) e.preventDefault();
+    if(e.code==="KeyP" && running){ paused=!paused; return; }
+    keys.add(e.code);
+  },{passive:false});
+  window.addEventListener("keyup",(e)=>keys.delete(e.code));
+
+  // drag
+  let dragging=false;
+  function getCanvasX(clientX){
+    const rect=canvas.getBoundingClientRect();
+    return (clientX-rect.left)*(canvas.width/rect.width);
+  }
+  canvas.addEventListener("pointerdown",(e)=>{
+    dragging=true; canvas.setPointerCapture(e.pointerId);
+    player.x = clamp(getCanvasX(e.clientX), player.r+14, W-player.r-14);
+  });
+  canvas.addEventListener("pointermove",(e)=>{
+    if(!dragging) return;
+    player.x = clamp(getCanvasX(e.clientX), player.r+14, W-player.r-14);
+  });
+  canvas.addEventListener("pointerup",()=>dragging=false);
+  canvas.addEventListener("pointercancel",()=>dragging=false);
+
+  nameInput.addEventListener("input",()=>localStorage.setItem(NAME_KEY,(nameInput.value||"").trim()));
+  btnStart.addEventListener("click",reset);
+
+  running=false;
+  draw(true,"READY?");
+</script>
+</body>
+</html>
